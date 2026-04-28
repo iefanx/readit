@@ -345,15 +345,26 @@ async function init() {
         };
 
         const { textToSpeech } = await loadTextToSpeech(ONNX_DIR, REMOTE_ONNX_DIR, sessionOptions, (name, current, total, isDownload) => {
+            const loadingTitle = document.getElementById('loading-title');
+            const loadingSubtext = document.getElementById('loading-subtext');
+            
             if (isDownload && total > 1) {
+                loadingSubtext.classList.remove('hidden');
+                loadingTitle.textContent = "Downloading AI Models";
                 // Byte-level download progress
                 const loadedMB = (current / (1024 * 1024)).toFixed(1);
                 const totalMB = (total / (1024 * 1024)).toFixed(1);
                 const percent = (current / total) * 100;
-                loadingText.textContent = `Downloading ${name}... ${loadedMB} / ${totalMB} MB`;
+                loadingText.textContent = `${name}... ${loadedMB} / ${totalMB} MB`;
                 loadProgress.style.width = `${percent}%`;
             } else {
+                loadingSubtext.classList.add('hidden');
+                loadingTitle.textContent = "Initializing ReadIt";
                 loadingText.textContent = `Loading ${name}...`;
+                // Fake progress or full for loading
+                if (total > 0) {
+                     loadProgress.style.width = `${(current / total) * 100}%`;
+                }
             }
         });
 

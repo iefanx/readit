@@ -171,9 +171,17 @@
 
     <div id="loading-overlay" class="overlay">
         <div class="loader-content">
-            <div class="spinner"></div>
-            <p id="loading-text">Loading Models...</p>
-            <div class="progress-bar"><div id="load-progress" class="progress-fill"></div></div>
+            <div class="loader-icon-container">
+                <div class="spinner-ring"></div>
+                <div class="spinner-ring inner"></div>
+                <svg class="loader-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 22h20L12 2zm0 3.8l6.8 14.2H5.2L12 5.8z"/></svg>
+            </div>
+            <h2 id="loading-title">Initializing ReadIt</h2>
+            <p id="loading-text">Loading AI Models...</p>
+            <div class="progress-container">
+                <div class="progress-bar"><div id="load-progress" class="progress-fill"></div></div>
+            </div>
+            <p id="loading-subtext" class="hidden">This is a one-time download. Next time, models will load instantly from your device.</p>
         </div>
     </div>
 
