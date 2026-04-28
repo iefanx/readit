@@ -1,4 +1,5 @@
 // ort is loaded globally via script tag in index.html
+import { getModelFromCache, saveModelToCache } from './db.js';
 
 // Available languages for multilingual TTS
 export const AVAILABLE_LANGS = ['en', 'ko', 'es', 'pt', 'fr'];
@@ -378,27 +379,84 @@ export async function loadTextProcessor(onnxDir) {
     return new UnicodeProcessor(indexer);
 }
 
-export async function loadOnnx(onnxPath, options) {
-    return await ort.InferenceSession.create(onnxPath, options);
+/**
+ * Load an ONNX model with a 3-tier strategy:
+ * 1. Check IndexedDB cache (instant, works offline)
+ * 2. Fetch from network (HuggingFace CDN) with byte-level progress
+ * 3. Save to IndexedDB for future offline use
+ */
+export async function loadOnnx(onnxUrl, options, progressCallback = null, name = "Model") {
+    const modelKey = onnxUrl.split('/').pop(); // e.g. "duration_predictor.onnx"
+    
+    // 1. Check IndexedDB cache first
+    const cachedBuffer = await getModelFromCache(modelKey);
+    if (cachedBuffer) {
+        if (progressCallback) progressCallback(name, 1, 1, true);
+        if (progressCallback) progressCallback(name + ' (Initializing)', 1, 1, false);
+        return await ort.InferenceSession.create(new Uint8Array(cachedBuffer), options);
+    }
+    
+    // 2. Download from network with streaming progress
+    if (progressCallback) progressCallback(name + ' (Downloading)', 0, 1, true);
+    
+    const response = await fetch(onnxUrl);
+    if (!response.ok) throw new Error(`Failed to download ${name}: ${response.status}`);
+    
+    const contentLength = response.headers.get('content-length');
+    const total = contentLength ? parseInt(contentLength, 10) : 0;
+    
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        if (progressCallback && total > 0) {
+            progressCallback(name, loaded, total, true);
+        }
+    }
+    
+    // Combine chunks into a single buffer
+    const combined = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+    }
+    
+    // 3. Save to IndexedDB for offline use (fire-and-forget)
+    saveModelToCache(modelKey, combined.buffer).catch(err =>
+        console.warn(`Failed to cache model ${modelKey}:`, err)
+    );
+    
+    if (progressCallback) progressCallback(name + ' (Initializing)', 1, 1, false);
+    
+    return await ort.InferenceSession.create(combined, options);
 }
 
-export async function loadTextToSpeech(onnxDir, sessionOptions = {}, progressCallback = null) {
-    const cfgs = await loadCfgs(onnxDir);
+export async function loadTextToSpeech(localDir, remoteDir, sessionOptions = {}, progressCallback = null) {
+    const cfgs = await loadCfgs(localDir);
     const modelPaths = [
-        { name: 'Duration Predictor', path: `${onnxDir}/duration_predictor.onnx` },
-        { name: 'Text Encoder', path: `${onnxDir}/text_encoder.onnx` },
-        { name: 'Vector Estimator', path: `${onnxDir}/vector_estimator.onnx` },
-        { name: 'Vocoder', path: `${onnxDir}/vocoder.onnx` }
+        { name: 'Duration Predictor', path: `${remoteDir}/duration_predictor.onnx` },
+        { name: 'Text Encoder', path: `${remoteDir}/text_encoder.onnx` },
+        { name: 'Vector Estimator', path: `${remoteDir}/vector_estimator.onnx` },
+        { name: 'Vocoder', path: `${remoteDir}/vocoder.onnx` }
     ];
 
     const sessions = [];
     for (let i = 0; i < modelPaths.length; i++) {
-        if (progressCallback) progressCallback(modelPaths[i].name, i + 1, modelPaths.length);
-        sessions.push(await loadOnnx(modelPaths[i].path, sessionOptions));
+        if (progressCallback) progressCallback(modelPaths[i].name, i, modelPaths.length, false);
+        sessions.push(await loadOnnx(modelPaths[i].path, sessionOptions, progressCallback, modelPaths[i].name));
     }
 
     const [dpOrt, textEncOrt, vectorEstOrt, vocoderOrt] = sessions;
-    const textProcessor = await loadTextProcessor(onnxDir);
+    const textProcessor = await loadTextProcessor(localDir);
+    
+    if (progressCallback) progressCallback('AI Setup Complete', 1, 1, false);
+    
     return { textToSpeech: new TextToSpeech(cfgs, textProcessor, dpOrt, textEncOrt, vectorEstOrt, vocoderOrt), cfgs };
 }
 

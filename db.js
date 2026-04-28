@@ -75,3 +75,18 @@ export async function deleteDocumentFull(docId) {
     // Delete chunks in parallel
     await Promise.all(chunkKeys.map(k => del(k)));
 }
+
+// --- Model Cache ---
+// Stores ONNX model binaries in IndexedDB for persistent offline access.
+// Unlike the Service Worker Cache API (which browsers can evict under storage pressure),
+// IndexedDB data persists reliably, especially when the site is installed as a PWA.
+
+const MODEL_PREFIX = 'st_model_';
+
+export async function getModelFromCache(modelName) {
+    return await get(MODEL_PREFIX + modelName);
+}
+
+export async function saveModelToCache(modelName, arrayBuffer) {
+    await set(MODEL_PREFIX + modelName, arrayBuffer);
+}

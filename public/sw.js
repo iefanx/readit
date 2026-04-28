@@ -69,15 +69,15 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Cache-First for huge ONNX and WASM files
-    if (event.request.url.includes('.onnx') || event.request.url.includes('.wasm') || event.request.url.includes('voice_styles')) {
+    // Cache-First for huge ONNX, WASM, and voice_style files (including cross-origin HuggingFace CDN)
+    if (event.request.url.includes('.onnx') || event.request.url.includes('.wasm') || event.request.url.includes('voice_styles') || event.request.url.includes('huggingface.co')) {
         event.respondWith(
             caches.match(event.request).then((cachedResponse) => {
                 if (cachedResponse) return cachedResponse;
                 
                 return fetch(event.request).then((networkResponse) => {
-                    // Only cache valid responses
-                    if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+                    // Cache both same-origin (basic) and cross-origin (cors/opaque) responses
+                    if (networkResponse && networkResponse.status === 200) {
                         const responseToCache = networkResponse.clone();
                         caches.open(CACHE_NAME).then((cache) => {
                             cache.put(event.request, responseToCache);

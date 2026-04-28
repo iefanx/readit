@@ -5,6 +5,7 @@ import { saveDocument, getDocument, getAllDocuments, updateDocumentProgress, sav
 // Configuration
 const ASSETS_PATH = '/assets';
 const ONNX_DIR = `${ASSETS_PATH}/onnx`;
+const REMOTE_ONNX_DIR = 'https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx';
 const VOICE_STYLES_DIR = `${ASSETS_PATH}/voice_styles`;
 
 // Views
@@ -343,10 +344,17 @@ async function init() {
             graphOptimizationLevel: 'all'
         };
 
-        const { textToSpeech } = await loadTextToSpeech(ONNX_DIR, sessionOptions, (name, current, total) => {
-            const percent = (current / total) * 100;
-            loadingText.textContent = `Loading ${name}...`;
-            loadProgress.style.width = `${percent}%`;
+        const { textToSpeech } = await loadTextToSpeech(ONNX_DIR, REMOTE_ONNX_DIR, sessionOptions, (name, current, total, isDownload) => {
+            if (isDownload && total > 1) {
+                // Byte-level download progress
+                const loadedMB = (current / (1024 * 1024)).toFixed(1);
+                const totalMB = (total / (1024 * 1024)).toFixed(1);
+                const percent = (current / total) * 100;
+                loadingText.textContent = `Downloading ${name}... ${loadedMB} / ${totalMB} MB`;
+                loadProgress.style.width = `${percent}%`;
+            } else {
+                loadingText.textContent = `Loading ${name}...`;
+            }
         });
 
         tts = textToSpeech;
