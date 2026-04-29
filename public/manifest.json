@@ -95,7 +95,7 @@
     },
     "shortcuts": [
         {
-            "name": "Paste Text",
+            "name": "Text",
             "short_name": "Text",
             "description": "Start reading from pasted text",
             "url": "/?action=paste",
