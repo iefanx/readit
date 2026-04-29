@@ -125,12 +125,12 @@ class AudioPlayer {
     pause() {
         this.isPlaying = false;
         if (this.source) {
+            const elapsedRealTime = this.ctx.currentTime - this.startTime;
+            const elapsedAudioTime = elapsedRealTime * this.playbackRate;
+            this.offset += elapsedAudioTime;
             try {
                 this.source.onended = null;
                 this.source.stop();
-                const elapsedRealTime = this.ctx.currentTime - this.startTime;
-                const elapsedAudioTime = elapsedRealTime * this.playbackRate;
-                this.offset += elapsedAudioTime;
             } catch (e) { /* source may have already stopped */ }
             this.source = null;
         }
@@ -144,27 +144,33 @@ class AudioPlayer {
         const wasPlaying = this.isPlaying;
         if (this.isPlaying) this.pause();
         
+        // Safety check to ensure offset is a valid number
+        if (isNaN(this.offset)) this.offset = 0;
+        
         this.offset += deltaSeconds;
         
         while (this.offset < 0 && this.currentIndex > 0) {
             this.currentIndex--;
-            this.offset += this.chunks[this.currentIndex].duration;
+            const prevDuration = this.chunks[this.currentIndex]?.duration || 0;
+            this.offset += prevDuration;
         }
+        
         if (this.offset < 0) {
             this.currentIndex = 0;
             this.offset = 0;
         }
 
-        while (this.currentIndex < this.chunks.length && this.offset >= this.chunks[this.currentIndex].duration) {
-            this.offset -= this.chunks[this.currentIndex].duration;
+        while (this.currentIndex < this.chunks.length && this.offset >= (this.chunks[this.currentIndex]?.duration || 0)) {
+            const currentDuration = this.chunks[this.currentIndex]?.duration || 0;
+            if (currentDuration === 0) break; // Avoid infinite loop if duration is missing
+            this.offset -= currentDuration;
             this.currentIndex++;
         }
 
         if (this.currentIndex >= this.chunks.length) {
-            this.currentIndex = this.chunks.length - 1;
-            if (this.currentIndex < 0) this.currentIndex = 0;
+            this.currentIndex = Math.max(0, this.chunks.length - 1);
             if (this.chunks.length > 0) {
-                this.offset = this.chunks[this.currentIndex].duration - 0.1;
+                this.offset = Math.max(0, (this.chunks[this.currentIndex]?.duration || 0) - 0.1);
             } else {
                 this.offset = 0;
             }
@@ -389,7 +395,7 @@ async function init() {
         
         setupMediaSession();
 
-        ort.env.wasm.wasmPaths = '/';
+        ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
         const sessionOptions = {
             executionProviders: ['webgpu', 'wasm'],
             graphOptimizationLevel: 'all'
