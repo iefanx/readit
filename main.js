@@ -718,7 +718,25 @@ playPauseBtn.addEventListener('click', () => {
     const text = textInput.value.trim();
     if (!text) return;
 
-    if (isGenerating || player.chunks.length > 0) {
+    if (!textInput.classList.contains('hidden')) {
+        // We are in Edit Mode. Start reading from cursor position.
+        const cursorPosition = textInput.selectionStart || 0;
+        
+        // Approximate the starting chunk based on cursor position
+        const maxLen = langSelect.value === 'ko' ? 120 : 300;
+        const tempTextList = chunkText(text, maxLen);
+        let tempCharCount = 0;
+        let targetChunk = 0;
+        for (let i = 0; i < tempTextList.length; i++) {
+            tempCharCount += tempTextList[i].length;
+            if (cursorPosition <= tempCharCount) {
+                targetChunk = i;
+                break;
+            }
+        }
+        
+        startGenerationAndPlayback(text, targetChunk);
+    } else if (isGenerating || player.chunks.length > 0) {
         const isPlaying = player.toggle();
         updatePlayPauseIcon(isPlaying);
     } else {
@@ -726,13 +744,28 @@ playPauseBtn.addEventListener('click', () => {
     }
 });
 
-// Click to Read
+// Click to Read / Edit
 readingDisplay.addEventListener('click', (e) => {
     if (e.target.classList.contains('text-chunk')) {
         const idParts = e.target.id.split('-');
         if (idParts.length === 2) {
             const clickedIndex = parseInt(idParts[1]);
-            seekToChunk(clickedIndex, 0);
+            
+            if (player && player.isPlaying) {
+                // Reading Mode: seek to chunk
+                seekToChunk(clickedIndex, 0);
+            } else {
+                // Edit Mode: switch to textarea
+                readingDisplay.classList.add('hidden');
+                textInput.classList.remove('hidden');
+                textInput.focus();
+                
+                // Place cursor at the start of the clicked chunk
+                if (currentCharOffsets && currentCharOffsets[clickedIndex] !== undefined) {
+                    const charPos = currentCharOffsets[clickedIndex];
+                    textInput.setSelectionRange(charPos, charPos);
+                }
+            }
         }
     }
 });

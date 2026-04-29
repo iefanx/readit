@@ -206,6 +206,9 @@ textarea::placeholder {
     transition: color 0.3s ease, background 0.3s ease;
     border-radius: 4px;
     padding: 2px 0;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .text-chunk.active {
