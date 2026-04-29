@@ -41,17 +41,31 @@
     "screenshots": [
         {
             "src": "assets/images/Screenshot-1.png",
-            "sizes": "750x1334",
+            "sizes": "1224x1764",
             "type": "image/png",
             "form_factor": "narrow",
-            "label": "ReadIt Mobile"
+            "label": "ReadIt Player"
+        },
+        {
+            "src": "assets/images/Screenshot-1.png",
+            "sizes": "1224x1764",
+            "type": "image/png",
+            "form_factor": "wide",
+            "label": "ReadIt Player"
         },
         {
             "src": "assets/images/Screenshot-2.png",
-            "sizes": "1920x1080",
+            "sizes": "1224x1764",
+            "type": "image/png",
+            "form_factor": "narrow",
+            "label": "ReadIt Library"
+        },
+        {
+            "src": "assets/images/Screenshot-2.png",
+            "sizes": "1224x1764",
             "type": "image/png",
             "form_factor": "wide",
-            "label": "ReadIt Desktop"
+            "label": "ReadIt Library"
         }
     ],
     "file_handlers": [
