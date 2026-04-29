@@ -40,6 +40,8 @@ const stepsVal = document.getElementById('steps-val');
 const downloadFullBtn = document.getElementById('download-full-btn');
 const genStatus = document.getElementById('gen-status');
 const genProgress = document.getElementById('gen-progress');
+const readProgressContainer = document.getElementById('read-progress-container');
+const readProgressFill = document.getElementById('read-progress-fill');
 const loadingOverlay = document.getElementById('loading-overlay');
 const loadingText = document.getElementById('loading-text');
 const loadProgress = document.getElementById('load-progress');
@@ -52,6 +54,10 @@ let currentSpeed = 1.0;
 let isGenerating = false;
 let isGenerationComplete = false;
 let currentDocId = null;
+
+let currentTextList = [];
+let currentCharOffsets = [];
+let currentTotalChars = 0;
 
 // Silent audio element for MediaSession (notification bar controls)
 let silentAudio = null;
@@ -253,12 +259,12 @@ class AudioPlayer {
             if (this.rafId) cancelAnimationFrame(this.rafId);
             const updateProgress = () => {
                 if (!this.isPlaying || !this.source) return;
-                const elapsed = (this.ctx.currentTime - this.startTime) * this.playbackRate;
-                let progress = Math.min(1, elapsed / chunk.duration);
+                const elapsed = ((this.ctx.currentTime - this.startTime) * this.playbackRate) + this.offset;
+                let progress = Math.min(1, Math.max(0, elapsed / chunk.duration));
                 if (chunk.totalChars) {
                     const currentChars = chunk.startChar + (progress * chunk.chunkChars);
                     const pct = (currentChars / chunk.totalChars) * 100;
-                    document.getElementById('read-progress-fill').style.width = `${pct}%`;
+                    if (readProgressFill) readProgressFill.style.width = `${pct}%`;
                 }
                 this.rafId = requestAnimationFrame(updateProgress);
             };
@@ -726,25 +732,84 @@ readingDisplay.addEventListener('click', (e) => {
         const idParts = e.target.id.split('-');
         if (idParts.length === 2) {
             const clickedIndex = parseInt(idParts[1]);
-            
-            // Check if player already has this chunk
-            const existingChunkIdx = player.chunks.findIndex(c => c.chunkIndex === clickedIndex);
-            
-            if (existingChunkIdx !== -1) {
-                // Seek directly to the loaded chunk
-                player.pause();
-                player.currentIndex = existingChunkIdx;
-                player.offset = 0;
-                player.play();
-                updatePlayPauseIcon(true);
-            } else {
-                // Restart generation from this exact chunk
-                const text = textInput.value.trim();
-                startGenerationAndPlayback(text, clickedIndex);
-            }
+            seekToChunk(clickedIndex, 0);
         }
     }
 });
+
+// Progress Bar Seeking
+let isDraggingProgress = false;
+
+function handleProgressSeek(e) {
+    if (!currentTotalChars || currentTextList.length === 0) return;
+    
+    const rect = readProgressContainer.getBoundingClientRect();
+    let x = e.clientX - rect.left;
+    x = Math.max(0, Math.min(x, rect.width));
+    const pct = x / rect.width;
+    
+    // Update visual immediately
+    if (readProgressFill) readProgressFill.style.width = `${pct * 100}%`;
+    
+    const targetChar = pct * currentTotalChars;
+    
+    // Find the target chunk based on character offset
+    let targetChunkIndex = 0;
+    for (let i = 0; i < currentTextList.length; i++) {
+        const start = currentCharOffsets[i];
+        const end = start + currentTextList[i].length;
+        if (targetChar >= start && targetChar <= end) {
+            targetChunkIndex = i;
+            break;
+        }
+    }
+    
+    // Approximate offset within the chunk (in seconds) if it's cached/generated
+    let offsetSeconds = 0;
+    if (player && player.chunks[targetChunkIndex]) {
+        const chunk = player.chunks[targetChunkIndex];
+        const charsIntoChunk = targetChar - chunk.startChar;
+        const progressInChunk = charsIntoChunk / chunk.chunkChars;
+        offsetSeconds = Math.max(0, progressInChunk * chunk.duration);
+    }
+    
+    seekToChunk(targetChunkIndex, offsetSeconds);
+}
+
+readProgressContainer.addEventListener('pointerdown', (e) => {
+    isDraggingProgress = true;
+    handleProgressSeek(e);
+    readProgressContainer.setPointerCapture(e.pointerId);
+});
+
+readProgressContainer.addEventListener('pointermove', (e) => {
+    if (isDraggingProgress) handleProgressSeek(e);
+});
+
+readProgressContainer.addEventListener('pointerup', (e) => {
+    if (isDraggingProgress) {
+        isDraggingProgress = false;
+        readProgressContainer.releasePointerCapture(e.pointerId);
+    }
+});
+
+function seekToChunk(targetChunkIndex, offsetSeconds = 0) {
+    // Check if player already has this chunk
+    const existingChunkIdx = player.chunks.findIndex(c => c.chunkIndex === targetChunkIndex);
+    
+    if (existingChunkIdx !== -1) {
+        // Seek directly to the loaded chunk
+        player.pause();
+        player.currentIndex = existingChunkIdx;
+        player.offset = offsetSeconds;
+        player.play();
+        updatePlayPauseIcon(true);
+    } else {
+        // Restart generation from this exact chunk
+        const text = textInput.value.trim();
+        startGenerationAndPlayback(text, targetChunkIndex);
+    }
+}
 
 // Generation Logic
 let abortController = null;
@@ -793,6 +858,11 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
         currentCharsCount += t.length;
         charOffsets.push(currentCharsCount);
     }
+    
+    // Store globally for progress bar seeking
+    currentTextList = textList;
+    currentCharOffsets = charOffsets;
+    currentTotalChars = totalChars;
 
     player.reset();
     isGenerating = true;
