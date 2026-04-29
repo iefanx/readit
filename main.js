@@ -497,8 +497,69 @@ btnFile.addEventListener('click', () => {
     fileInput.click();
 });
 
-btnLink.addEventListener('click', () => {
-    alert("Direct link downloading is blocked by browsers due to CORS security. A backend proxy feature is planned for the future.");
+btnLink.addEventListener('click', async () => {
+    const url = prompt("Enter the website URL to read:");
+    if (!url) return;
+
+    let formattedUrl = url;
+    if (!url.startsWith('http')) {
+        formattedUrl = 'https://' + url;
+    }
+
+    loadingOverlay.style.display = 'flex';
+    loadingOverlay.style.opacity = '1';
+    loadingText.textContent = `Fetching content...`;
+
+    try {
+        const response = await fetch(formattedUrl);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const html = await response.text();
+        
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        // Basic cleaning
+        doc.querySelectorAll('script, style, nav, footer, header, noscript, iframe').forEach(el => el.remove());
+        
+        const title = doc.title || formattedUrl.split('/').pop() || "Web Content";
+        
+        // Use a more structured approach to text extraction if possible
+        // Fallback to body innerText
+        let text = "";
+        const mainContent = doc.querySelector('main, article, #content, .content, .post-content');
+        if (mainContent) {
+            text = mainContent.innerText;
+        } else {
+            text = doc.body.innerText;
+        }
+
+        text = text.trim().replace(/\n\s*\n/g, '\n\n');
+
+        if (text.length < 50) {
+            throw new Error("The fetched content seems too short or protected. This is likely due to CORS or the site being a Single Page App (SPA).");
+        }
+
+        const newDocId = await saveDocument({
+            title: title,
+            text: text,
+            coverImage: null
+        });
+        await openDocument(newDocId);
+
+    } catch (err) {
+        console.error(err);
+        let errorMsg = "Failed to fetch link. Most websites block direct access from other apps due to security (CORS).";
+        if (err.message.includes("Failed to fetch")) {
+            errorMsg += "\n\nTip: Sites like Wikipedia often work, but many news sites and social media block this.";
+        } else {
+            errorMsg += `\n\nError: ${err.message}`;
+        }
+        alert(errorMsg);
+    } finally {
+        loadingOverlay.style.opacity = '0';
+        setTimeout(() => loadingOverlay.style.display = 'none', 500);
+    }
 });
 
 async function handleFileSelection(file) {
