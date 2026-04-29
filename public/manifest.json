@@ -15,25 +15,25 @@
     "icons": [
         {
             "src": "assets/images/icon-192.png",
-            "sizes": "192x192",
+            "sizes": "384x384",
             "type": "image/png",
             "purpose": "any"
         },
         {
             "src": "assets/images/icon-192.png",
-            "sizes": "192x192",
+            "sizes": "384x384",
             "type": "image/png",
             "purpose": "maskable"
         },
         {
             "src": "assets/images/icon-512.png",
-            "sizes": "512x512",
+            "sizes": "1024x1024",
             "type": "image/png",
             "purpose": "any"
         },
         {
             "src": "assets/images/icon-512.png",
-            "sizes": "512x512",
+            "sizes": "1024x1024",
             "type": "image/png",
             "purpose": "maskable"
         }
@@ -99,14 +99,14 @@
             "short_name": "Text",
             "description": "Start reading from pasted text",
             "url": "/?action=paste",
-            "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+            "icons": [{ "src": "assets/images/icon-192.png", "sizes": "384x384" }]
         },
         {
             "name": "Upload File",
             "short_name": "Upload",
             "description": "Select a document to read",
             "url": "/?action=upload",
-            "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+            "icons": [{ "src": "assets/images/icon-192.png", "sizes": "384x384" }]
         }
     ]
 }

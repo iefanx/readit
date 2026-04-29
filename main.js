@@ -317,7 +317,9 @@ async function init() {
     try {
         // Register SW
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(console.error);
+            navigator.serviceWorker.register('/sw.js')
+                .then(reg => console.log('Service Worker Registered!', reg.scope))
+                .catch(console.error);
             navigator.serviceWorker.addEventListener('message', async (event) => {
                 if (event.data && event.data.type === 'SHARED_FILE') {
                     await handleFileSelection(event.data.file);
