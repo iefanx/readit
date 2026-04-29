@@ -1,6 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
-    <rect width="192" height="192" fill="#000000" />
-    <g transform="translate(96, 96) scale(0.55) translate(-96, -96)">
-        <path fill="#ffffff" transform="scale(0.375)" d="M256 64L48 448h416L256 64zm0 88l144 264H112l144-264z"/>
-    </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192"><rect width="192" height="192" fill="#000"/><g><path fill="#fff" d="M256 64L48 448h416L256 64zm0 88l144 264H112l144-264z" transform="translate(96, 96) scale(0.55) translate(-96, -96) scale(0.375)"/></g></svg>
