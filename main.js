@@ -511,7 +511,9 @@ btnLink.addEventListener('click', async () => {
     loadingText.textContent = `Fetching content...`;
 
     try {
-        const response = await fetch(formattedUrl);
+        // Using allorigins.win as a proxy to bypass CORS restrictions
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(formattedUrl)}`;
+        const response = await fetch(proxyUrl);
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         
         const html = await response.text();
@@ -549,13 +551,7 @@ btnLink.addEventListener('click', async () => {
 
     } catch (err) {
         console.error(err);
-        let errorMsg = "Failed to fetch link. Most websites block direct access from other apps due to security (CORS).";
-        if (err.message.includes("Failed to fetch")) {
-            errorMsg += "\n\nTip: Sites like Wikipedia often work, but many news sites and social media block this.";
-        } else {
-            errorMsg += `\n\nError: ${err.message}`;
-        }
-        alert(errorMsg);
+        alert(`Failed to fetch link.\n\nNote: Many websites (especially news sites with paywalls) prevent automated access even through a proxy.\n\nError: ${err.message}`);
     } finally {
         loadingOverlay.style.opacity = '0';
         setTimeout(() => loadingOverlay.style.display = 'none', 500);
