@@ -53,6 +53,26 @@ let isGenerating = false;
 let isGenerationComplete = false;
 let currentDocId = null;
 
+// Silent audio element for MediaSession (notification bar controls)
+let silentAudio = null;
+function createSilentAudio() {
+    if (silentAudio) return;
+    // Create a tiny silent WAV (44 bytes header + 2 bytes of silence)
+    const sr = 8000;
+    const buffer = new ArrayBuffer(46);
+    const view = new DataView(buffer);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); view.setUint32(4, 38, true); w(8, 'WAVE'); w(12, 'fmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, sr, true); view.setUint32(28, sr * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    w(36, 'data'); view.setUint32(40, 2, true); view.setInt16(44, 0, true);
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    silentAudio = new Audio(URL.createObjectURL(blob));
+    silentAudio.loop = true;
+    silentAudio.volume = 0.01; // Near-silent but keeps MediaSession alive
+}
+
 class AudioPlayer {
     constructor(sampleRate) {
         this.sampleRate = sampleRate;
@@ -89,21 +109,34 @@ class AudioPlayer {
         }
     }
 
-    play() {
-        if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+    async play() {
+        if (this.ctx && this.ctx.state === 'suspended') {
+            await this.ctx.resume();
+        }
         this.isPlaying = true;
         this._playCurrent();
+        // Start silent audio to keep MediaSession alive (notification bar)
+        try {
+            createSilentAudio();
+            if (silentAudio) await silentAudio.play();
+        } catch (e) { /* Autoplay blocked, user interaction required */ }
     }
 
     pause() {
         this.isPlaying = false;
         if (this.source) {
-            this.source.onended = null;
-            this.source.stop();
-            const elapsedRealTime = this.ctx.currentTime - this.startTime;
-            const elapsedAudioTime = elapsedRealTime * this.playbackRate;
-            this.offset += elapsedAudioTime;
+            try {
+                this.source.onended = null;
+                this.source.stop();
+                const elapsedRealTime = this.ctx.currentTime - this.startTime;
+                const elapsedAudioTime = elapsedRealTime * this.playbackRate;
+                this.offset += elapsedAudioTime;
+            } catch (e) { /* source may have already stopped */ }
             this.source = null;
+        }
+        // Pause silent audio (releases notification bar play state)
+        if (silentAudio) {
+            try { silentAudio.pause(); } catch (e) { }
         }
     }
 
@@ -168,61 +201,72 @@ class AudioPlayer {
                 this.offset = 0;
                 if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "none";
                 releaseWakeLock();
+                if (silentAudio) try { silentAudio.pause(); } catch (e) { }
             }
             if (this.rafId) cancelAnimationFrame(this.rafId);
             return;
         }
 
-        const chunk = this.chunks[this.currentIndex];
-        
-        const audioBuffer = this.ctx.createBuffer(1, chunk.wav.length, this.sampleRate);
-        audioBuffer.getChannelData(0).set(chunk.wav);
+        try {
+            const chunk = this.chunks[this.currentIndex];
+            const wavData = chunk.wav instanceof Float32Array ? chunk.wav : new Float32Array(chunk.wav);
+            
+            const audioBuffer = this.ctx.createBuffer(1, wavData.length, this.sampleRate);
+            audioBuffer.getChannelData(0).set(wavData);
 
-        this.source = this.ctx.createBufferSource();
-        this.source.buffer = audioBuffer;
-        this.source.playbackRate.value = this.playbackRate;
-        this.source.connect(this.ctx.destination);
-        
-        this.source.onended = () => {
+            this.source = this.ctx.createBufferSource();
+            this.source.buffer = audioBuffer;
+            this.source.playbackRate.value = this.playbackRate;
+            this.source.connect(this.ctx.destination);
+            
+            this.source.onended = () => {
+                this.currentIndex++;
+                this.offset = 0;
+                this.source = null;
+                
+                // Save progress
+                if (currentDocId) {
+                    updateDocumentProgress(currentDocId, chunk.chunkIndex + 1);
+                }
+
+                this._playCurrent();
+            };
+
+            this.startTime = this.ctx.currentTime;
+            
+            let startOffset = this.offset;
+            if (startOffset < 0) startOffset = 0;
+            if (startOffset > audioBuffer.duration) startOffset = audioBuffer.duration;
+            
+            this.source.start(0, startOffset);
+            
+            requestWakeLock();
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "playing";
+            
+            // Smooth Progress Bar
+            if (this.rafId) cancelAnimationFrame(this.rafId);
+            const updateProgress = () => {
+                if (!this.isPlaying || !this.source) return;
+                const elapsed = (this.ctx.currentTime - this.startTime) * this.playbackRate;
+                let progress = Math.min(1, elapsed / chunk.duration);
+                if (chunk.totalChars) {
+                    const currentChars = chunk.startChar + (progress * chunk.chunkChars);
+                    const pct = (currentChars / chunk.totalChars) * 100;
+                    document.getElementById('read-progress-fill').style.width = `${pct}%`;
+                }
+                this.rafId = requestAnimationFrame(updateProgress);
+            };
+            this.rafId = requestAnimationFrame(updateProgress);
+
+            this._highlight(chunk.chunkIndex);
+        } catch (error) {
+            console.error('Playback error on chunk', this.currentIndex, error);
+            // Skip the broken chunk and try the next one
             this.currentIndex++;
             this.offset = 0;
             this.source = null;
-            
-            // Save progress
-            if (currentDocId) {
-                updateDocumentProgress(currentDocId, chunk.chunkIndex + 1);
-            }
-
             this._playCurrent();
-        };
-
-        this.startTime = this.ctx.currentTime;
-        
-        let startOffset = this.offset;
-        if (startOffset < 0) startOffset = 0;
-        if (startOffset > audioBuffer.duration) startOffset = audioBuffer.duration;
-        
-        this.source.start(0, startOffset);
-        
-        requestWakeLock();
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "playing";
-        
-        // Smooth Progress Bar
-        if (this.rafId) cancelAnimationFrame(this.rafId);
-        const updateProgress = () => {
-            if (!this.isPlaying || !this.source) return;
-            const elapsed = (this.ctx.currentTime - this.startTime) * this.playbackRate;
-            let progress = Math.min(1, elapsed / chunk.duration);
-            if (chunk.totalChars) {
-                const currentChars = chunk.startChar + (progress * chunk.chunkChars);
-                const pct = (currentChars / chunk.totalChars) * 100;
-                document.getElementById('read-progress-fill').style.width = `${pct}%`;
-            }
-            this.rafId = requestAnimationFrame(updateProgress);
-        };
-        this.rafId = requestAnimationFrame(updateProgress);
-
-        this._highlight(chunk.chunkIndex);
+        }
     }
 
     _highlight(index) {
@@ -261,22 +305,33 @@ async function requestWakeLock() {
     try {
         if ('wakeLock' in navigator && !wakeLock) {
             wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
         }
     } catch (err) { }
 }
 function releaseWakeLock() {
     if (wakeLock !== null) {
-        wakeLock.release().then(() => { wakeLock = null; });
+        wakeLock.release().then(() => { wakeLock = null; }).catch(() => {});
     }
 }
 
+// Re-acquire wake lock when returning to the app
+document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && player && player.isPlaying) {
+        await requestWakeLock();
+    }
+});
+
 // Media Session
-function setupMediaSession() {
+function setupMediaSession(docTitle) {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
-            title: 'Reading Document',
-            artist: 'ReadIt PWA',
-            artwork: [{ src: '/favicon.ico', sizes: '64x64', type: 'image/x-icon' }]
+            title: docTitle || 'Reading Document',
+            artist: 'ReadIt',
+            artwork: [
+                { src: '/assets/images/icon-192.png', sizes: '384x384', type: 'image/png' },
+                { src: '/assets/images/icon-512.png', sizes: '1024x1024', type: 'image/png' }
+            ]
         });
 
         navigator.mediaSession.setActionHandler('play', () => {
@@ -292,22 +347,16 @@ function setupMediaSession() {
             }
         });
         navigator.mediaSession.setActionHandler('seekbackward', () => {
-            if (player) {
-                player.pause();
-                player.currentIndex = Math.max(0, player.currentIndex - 1);
-                player.offset = 0;
-                player.play();
-                updatePlayPauseIcon(true);
-            }
+            if (player) player.seek(-10);
         });
         navigator.mediaSession.setActionHandler('seekforward', () => {
-            if (player) {
-                player.pause();
-                player.currentIndex = Math.min(player.chunks.length - 1, player.currentIndex + 1);
-                player.offset = 0;
-                player.play();
-                updatePlayPauseIcon(true);
-            }
+            if (player) player.seek(10);
+        });
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+            if (player) player.seek(-10);
+        });
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+            if (player) player.seek(10);
         });
     }
 }
@@ -714,6 +763,12 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
     // Save text to DB before generating
     await saveCurrentDocText();
     
+    // Update MediaSession with document title
+    if (currentDocId) {
+        const doc = await getDocument(currentDocId);
+        if (doc) setupMediaSession(doc.title);
+    }
+    
     textInput.classList.add('hidden');
     readingDisplay.classList.remove('hidden');
 
@@ -772,42 +827,48 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
             let chunkData = null;
             const currentVoiceId = document.querySelector('.v-opt.active').getAttribute('data-val');
             
-            // Check Cache
-            if (currentDocId) {
-                const cachedWav = await getAudioChunk(currentDocId, i, currentVoiceId);
-                if (cachedWav) {
-                    chunkData = {
-                        wav: cachedWav,
-                        duration: (cachedWav.length / tts.sampleRate),
-                        textChunk: textList[i],
-                        chunkIndex: i,
-                        totalChunks: textList.length,
-                        startChar: charOffsets[i],
-                        chunkChars: textList[i].length,
-                        totalChars: totalChars
-                    };
-                }
-            }
-            
-            // If not cached, run AI inference
-            if (!chunkData) {
-                chunkData = await tts.generateSingleChunk(
-                    textList[i], lang, currentVoiceStyle, steps, i, textList.length, 1.05, 0.3
-                );
-                
-                chunkData.startChar = charOffsets[i];
-                chunkData.chunkChars = textList[i].length;
-                chunkData.totalChars = totalChars;
-                
-                // Save to cache
+            try {
+                // Check Cache
                 if (currentDocId) {
-                    await saveAudioChunk(currentDocId, i, currentVoiceId, chunkData.wav);
+                    const cachedWav = await getAudioChunk(currentDocId, i, currentVoiceId);
+                    if (cachedWav) {
+                        chunkData = {
+                            wav: cachedWav,
+                            duration: (cachedWav.length / tts.sampleRate),
+                            textChunk: textList[i],
+                            chunkIndex: i,
+                            totalChunks: textList.length,
+                            startChar: charOffsets[i],
+                            chunkChars: textList[i].length,
+                            totalChars: totalChars
+                        };
+                    }
                 }
+                
+                // If not cached, run AI inference
+                if (!chunkData) {
+                    chunkData = await tts.generateSingleChunk(
+                        textList[i], lang, currentVoiceStyle, steps, i, textList.length, 1.05, 0.3
+                    );
+                    
+                    chunkData.startChar = charOffsets[i];
+                    chunkData.chunkChars = textList[i].length;
+                    chunkData.totalChars = totalChars;
+                    
+                    // Save to cache
+                    if (currentDocId) {
+                        await saveAudioChunk(currentDocId, i, currentVoiceId, chunkData.wav);
+                    }
+                }
+                
+                if (signal.aborted || currentGenerationId !== myGenId) break;
+                
+                player.addChunk(chunkData);
+            } catch (chunkError) {
+                console.warn(`Failed to generate chunk ${i}, skipping:`, chunkError);
+                // Still add a placeholder so chunk indexing stays aligned
             }
             
-            if (signal.aborted || currentGenerationId !== myGenId) break;
-            
-            player.addChunk(chunkData);
             genProgress.textContent = Math.round(((i + 1) / textList.length) * 100);
         }
     } catch (error) {
@@ -828,10 +889,16 @@ downloadFullBtn.addEventListener('click', () => {
         return;
     }
 
-    let fullWav = [];
-    player.chunks.forEach(c => {
-        fullWav = [...fullWav, ...c.wav];
-    });
+    // Efficient Float32Array concatenation
+    let totalLength = 0;
+    for (const c of player.chunks) totalLength += c.wav.length;
+    const fullWav = new Float32Array(totalLength);
+    let offset = 0;
+    for (const c of player.chunks) {
+        const wavData = c.wav instanceof Float32Array ? c.wav : new Float32Array(c.wav);
+        fullWav.set(wavData, offset);
+        offset += wavData.length;
+    }
 
     const wavBuffer = writeWavFile(fullWav, tts.sampleRate);
     const blob = new Blob([wavBuffer], { type: 'audio/wav' });
@@ -862,18 +929,11 @@ deleteDocBtn.addEventListener('click', async () => {
         readingDisplay.innerHTML = '';
         settingsMenu.classList.remove('show');
         
-        loadDocumentsToCarousel();
+        loadHomeLibrary();
         
         playerView.classList.add('hidden');
         homeView.classList.remove('hidden');
     }
-});
-
-// Close dropdowns when clicking outside
-document.addEventListener('click', (e) => {
-    if (!e.target.closest('.menu-container')) settingsMenu.classList.remove('show');
-    if (!e.target.closest('.voice-btn') && !e.target.closest('.voice-dropdown')) voiceDropdown.classList.remove('show');
-    if (!e.target.closest('.speed-btn') && !e.target.closest('.speed-dropdown')) speedDropdown.classList.remove('show');
 });
 
 // Initialize

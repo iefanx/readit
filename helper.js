@@ -223,20 +223,30 @@ export class TextToSpeech {
         const textList = chunkText(text, maxLen);
         const langList = new Array(textList.length).fill(lang);
 
-        let wavCat = [];
+        let segments = [];
+        let totalLength = 0;
         let durCat = 0;
+        const silenceLen = Math.floor(silenceDuration * this.sampleRate);
 
         for (let i = 0; i < textList.length; i++) {
             const { wav, duration } = await this._infer([textList[i]], [langList[i]], style, totalStep, speed, progressCallback);
-            if (wavCat.length === 0) {
-                wavCat = wav;
-                durCat = duration[0];
-            } else {
-                const silenceLen = Math.floor(silenceDuration * this.sampleRate);
-                const silence = new Array(silenceLen).fill(0);
-                wavCat = [...wavCat, ...silence, ...wav];
-                durCat += duration[0] + silenceDuration;
+            const wavData = wav instanceof Float32Array ? wav : new Float32Array(wav);
+            if (i > 0) {
+                segments.push(new Float32Array(silenceLen)); // zero-filled silence
+                totalLength += silenceLen;
+                durCat += silenceDuration;
             }
+            segments.push(wavData);
+            totalLength += wavData.length;
+            durCat += duration[0];
+        }
+
+        // Single allocation concat
+        const wavCat = new Float32Array(totalLength);
+        let offset = 0;
+        for (const seg of segments) {
+            wavCat.set(seg, offset);
+            offset += seg.length;
         }
 
         return { wav: wavCat, duration: [durCat] };
@@ -251,12 +261,15 @@ export class TextToSpeech {
         const textList = chunkText(text, maxLen);
         const langList = new Array(textList.length).fill(lang);
 
+        const silenceLen = Math.floor(silenceDuration * this.sampleRate);
         for (let i = 0; i < textList.length; i++) {
             const { wav, duration } = await this._infer([textList[i]], [langList[i]], style, totalStep, speed, progressCallback);
-            const silenceLen = Math.floor(silenceDuration * this.sampleRate);
-            const silence = new Array(silenceLen).fill(0);
+            const wavData = wav instanceof Float32Array ? wav : new Float32Array(wav);
+            const combined = new Float32Array(wavData.length + silenceLen);
+            combined.set(wavData, 0);
+            // silence portion is already zero-filled
             yield { 
-                wav: [...wav, ...silence], 
+                wav: combined, 
                 duration: duration[0] + silenceDuration, 
                 textChunk: textList[i], 
                 chunkIndex: i, 
@@ -272,9 +285,12 @@ export class TextToSpeech {
 
         const { wav, duration } = await this._infer([textChunk], [lang], style, totalStep, speed, null);
         const silenceLen = Math.floor(silenceDuration * this.sampleRate);
-        const silence = new Array(silenceLen).fill(0);
+        const wavData = wav instanceof Float32Array ? wav : new Float32Array(wav);
+        const combined = new Float32Array(wavData.length + silenceLen);
+        combined.set(wavData, 0);
+        // silence portion is already zero-filled
         return { 
-            wav: [...wav, ...silence], 
+            wav: combined, 
             duration: duration[0] + silenceDuration, 
             textChunk: textChunk, 
             chunkIndex: chunkIndex, 
@@ -338,27 +354,28 @@ export class TextToSpeech {
  */
 export async function loadVoiceStyle(voiceStylePaths, verbose = false) {
     const bsz = voiceStylePaths.length;
-    const firstResponse = await fetch(voiceStylePaths[0]);
-    const firstStyle = await firstResponse.json();
 
-    const ttlDims = firstStyle.style_ttl.dims;
-    const dpDims = firstStyle.style_dp.dims;
+    // Fetch all styles in one pass (no double-fetch for the first one)
+    const styles = [];
+    for (let i = 0; i < bsz; i++) {
+        const response = await fetch(voiceStylePaths[i]);
+        styles.push(await response.json());
+    }
+
+    const ttlDims = styles[0].style_ttl.dims;
+    const dpDims = styles[0].style_dp.dims;
     const ttlDim1 = ttlDims[1];
     const ttlDim2 = ttlDims[2];
     const dpDim1 = dpDims[1];
     const dpDim2 = dpDims[2];
 
-    const ttlSize = bsz * ttlDim1 * ttlDim2;
-    const dpSize = bsz * dpDim1 * dpDim2;
-    const ttlFlat = new Float32Array(ttlSize);
-    const dpFlat = new Float32Array(dpSize);
+    const ttlFlat = new Float32Array(bsz * ttlDim1 * ttlDim2);
+    const dpFlat = new Float32Array(bsz * dpDim1 * dpDim2);
 
     for (let i = 0; i < bsz; i++) {
-        const response = await fetch(voiceStylePaths[i]);
-        const voiceStyle = await response.json();
-        const ttlData = voiceStyle.style_ttl.data.flat(Infinity);
+        const ttlData = styles[i].style_ttl.data.flat(Infinity);
         ttlFlat.set(ttlData, i * ttlDim1 * ttlDim2);
-        const dpData = voiceStyle.style_dp.data.flat(Infinity);
+        const dpData = styles[i].style_dp.data.flat(Infinity);
         dpFlat.set(dpData, i * dpDim1 * dpDim2);
     }
 

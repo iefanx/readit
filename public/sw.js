@@ -70,14 +70,14 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Cache-First for huge ONNX, WASM, and voice_style files (including cross-origin HuggingFace CDN)
-    if (event.request.url.includes('.onnx') || event.request.url.includes('.wasm') || event.request.url.includes('voice_styles') || event.request.url.includes('huggingface.co')) {
+    // Cache-First for voice_style files (small, needed offline)
+    // NOTE: ONNX and WASM models are cached in IndexedDB by helper.js — do NOT cache here to avoid ~200MB duplication
+    if (event.request.url.includes('voice_styles')) {
         event.respondWith(
             caches.match(event.request).then((cachedResponse) => {
                 if (cachedResponse) return cachedResponse;
                 
                 return fetch(event.request).then((networkResponse) => {
-                    // Cache both same-origin (basic) and cross-origin (cors/opaque) responses
                     if (networkResponse && networkResponse.status === 200) {
                         const responseToCache = networkResponse.clone();
                         caches.open(CACHE_NAME).then((cache) => {
@@ -90,6 +90,12 @@ self.addEventListener('fetch', (event) => {
                 });
             })
         );
+        return;
+    }
+
+    // Skip caching for large binary files (ONNX models, WASM) — handled by IndexedDB
+    if (event.request.url.includes('.onnx') || event.request.url.includes('.wasm') || event.request.url.includes('huggingface.co')) {
+        event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
         return;
     }
 
