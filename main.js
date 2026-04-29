@@ -804,9 +804,8 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
     genProgress.textContent = '0';
     updatePlayPauseIcon(true);
     player.initCtx();
-    player.isPlaying = true;
 
-    // Check if we have a saved chunkIndex to resume from
+    // Determine resume point
     let startChunkIndex = 0;
     if (startChunkIndexOverride !== null) {
         startChunkIndex = startChunkIndexOverride;
@@ -817,7 +816,7 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
         }
     }
     
-    // Initial scroll to starting chunk
+    // Scroll to resume chunk
     setTimeout(() => {
         const el = document.getElementById(`chunk-${startChunkIndex}`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -825,29 +824,62 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
 
     abortController = new AbortController();
     const signal = abortController.signal;
+    const voiceId = document.querySelector('.v-opt.active').getAttribute('data-val');
 
+    // Helper to build chunk metadata
+    const buildChunk = (wav, i) => ({
+        wav,
+        duration: wav.length / tts.sampleRate,
+        textChunk: textList[i],
+        chunkIndex: i,
+        totalChunks: textList.length,
+        startChar: charOffsets[i],
+        chunkChars: textList[i].length,
+        totalChars
+    });
+
+    // ── Phase 1: Pre-load cached chunks BEFORE the resume point ──
+    // Loads them from IndexedDB in parallel (instant). This enables backward seeking.
+    // If a chunk isn't cached, a brief silent placeholder keeps the array indices aligned.
+    if (startChunkIndex > 0 && currentDocId) {
+        const cacheResults = await Promise.all(
+            Array.from({ length: startChunkIndex }, (_, i) =>
+                getAudioChunk(currentDocId, i, voiceId)
+                    .then(wav => ({ i, wav }))
+                    .catch(() => ({ i, wav: null }))
+            )
+        );
+
+        for (const { i, wav } of cacheResults) {
+            if (signal.aborted || myGenId !== currentGenerationId) break;
+            if (wav) {
+                player.addChunk(buildChunk(wav, i));
+            } else {
+                // Not cached — insert a brief silent placeholder so array indices stay aligned
+                const silentWav = new Float32Array(Math.floor(tts.sampleRate * 0.05));
+                player.addChunk(buildChunk(silentWav, i));
+            }
+        }
+    }
+
+    // Set playback to the resume point. player.chunks.length == startChunkIndex at this point.
+    player.currentIndex = player.chunks.length;
+    player.offset = 0;
+    player.isPlaying = true;
+
+    // ── Phase 2: Generate chunks from resume point forward ──
     try {
         for (let i = startChunkIndex; i < textList.length; i++) {
             if (signal.aborted || currentGenerationId !== myGenId) break;
             
-            let chunkData = null;
-            const currentVoiceId = document.querySelector('.v-opt.active').getAttribute('data-val');
-            
             try {
-                // Check Cache
+                let chunkData = null;
+                
+                // Check cache first
                 if (currentDocId) {
-                    const cachedWav = await getAudioChunk(currentDocId, i, currentVoiceId);
+                    const cachedWav = await getAudioChunk(currentDocId, i, voiceId);
                     if (cachedWav) {
-                        chunkData = {
-                            wav: cachedWav,
-                            duration: (cachedWav.length / tts.sampleRate),
-                            textChunk: textList[i],
-                            chunkIndex: i,
-                            totalChunks: textList.length,
-                            startChar: charOffsets[i],
-                            chunkChars: textList[i].length,
-                            totalChars: totalChars
-                        };
+                        chunkData = buildChunk(cachedWav, i);
                     }
                 }
                 
@@ -856,14 +888,13 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
                     chunkData = await tts.generateSingleChunk(
                         textList[i], lang, currentVoiceStyle, steps, i, textList.length, 1.05, 0.3
                     );
-                    
                     chunkData.startChar = charOffsets[i];
                     chunkData.chunkChars = textList[i].length;
                     chunkData.totalChars = totalChars;
                     
                     // Save to cache
                     if (currentDocId) {
-                        await saveAudioChunk(currentDocId, i, currentVoiceId, chunkData.wav);
+                        await saveAudioChunk(currentDocId, i, voiceId, chunkData.wav);
                     }
                 }
                 
@@ -872,7 +903,6 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
                 player.addChunk(chunkData);
             } catch (chunkError) {
                 console.warn(`Failed to generate chunk ${i}, skipping:`, chunkError);
-                // Still add a placeholder so chunk indexing stays aligned
             }
             
             genProgress.textContent = Math.round(((i + 1) / textList.length) * 100);
