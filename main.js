@@ -5,7 +5,7 @@ import { saveDocument, getDocument, getAllDocuments, updateDocumentProgress, sav
 // Configuration
 const ASSETS_PATH = '/assets';
 const ONNX_DIR = `${ASSETS_PATH}/onnx`;
-const REMOTE_ONNX_DIR = 'https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx';
+const REMOTE_ONNX_DIR = 'https://huggingface.co/Supertone/supertonic-3/resolve/main/onnx';
 const VOICE_STYLES_DIR = `${ASSETS_PATH}/voice_styles`;
 
 // Views
@@ -196,9 +196,20 @@ class AudioPlayer {
     }
 
     setSpeed(speed) {
-        this.playbackRate = speed;
         if (this.isPlaying && this.source) {
+            // Commit the elapsed time at the old speed to the offset
+            const elapsedRealTime = this.ctx.currentTime - this.startTime;
+            const elapsedAudioTime = elapsedRealTime * this.playbackRate;
+            this.offset += elapsedAudioTime;
+            
+            // Reset startTime
+            this.startTime = this.ctx.currentTime;
+            
+            // Update rate
+            this.playbackRate = speed;
             this.source.playbackRate.value = speed;
+        } else {
+            this.playbackRate = speed;
         }
     }
 
@@ -401,6 +412,9 @@ async function init() {
         
         setupMediaSession();
 
+        if (typeof ort === 'undefined') {
+            throw new Error('ONNX Runtime (ort) failed to load from the network. This can happen due to a bad network connection or a corrupted cache. Please try repairing the app.');
+        }
         ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/';
         const sessionOptions = {
             executionProviders: ['webgpu', 'wasm'],
@@ -444,6 +458,49 @@ async function init() {
         console.error('Initialization failed:', error);
         loadingText.textContent = `Error: ${error.message}`;
         loadingText.style.color = '#ef4444';
+        
+        // Show repair button
+        const repairBtn = document.getElementById('repair-btn');
+        if (repairBtn) {
+            repairBtn.classList.remove('hidden');
+            repairBtn.addEventListener('click', async () => {
+                repairBtn.disabled = true;
+                repairBtn.textContent = 'Repairing...';
+                try {
+                    // Unregister service workers
+                    if ('serviceWorker' in navigator) {
+                        const registrations = await navigator.serviceWorker.getRegistrations();
+                        for (let registration of registrations) {
+                            await registration.unregister();
+                        }
+                    }
+                    
+                    // Clear caches
+                    if ('caches' in window) {
+                        const cacheNames = await caches.keys();
+                        await Promise.all(cacheNames.map(name => caches.delete(name)));
+                    }
+                    
+                    // Clear IndexedDB
+                    if (window.indexedDB) {
+                        if (window.indexedDB.databases) {
+                            const dbs = await window.indexedDB.databases();
+                            dbs.forEach(db => {
+                                if (db.name) window.indexedDB.deleteDatabase(db.name);
+                            });
+                        }
+                        // Also explicitly delete the default idb-keyval database if the API doesn't return it
+                        window.indexedDB.deleteDatabase('keyval-store');
+                    }
+                    
+                    // Hard reload
+                    window.location.reload(true);
+                } catch (e) {
+                    console.error('Repair failed:', e);
+                    repairBtn.textContent = 'Repair Failed';
+                }
+            });
+        }
     }
 }
 
@@ -686,8 +743,30 @@ menuBtn.addEventListener('click', (e) => {
 // Settings & Controls
 document.querySelectorAll('.v-opt').forEach(btn => {
     btn.addEventListener('click', async () => {
-        await updateVoiceStyle(btn.dataset.val);
+        const newVoiceId = btn.dataset.val;
+        if (newVoiceId === currentVoiceId) {
+            closeAllDropdowns();
+            return;
+        }
+        
+        await updateVoiceStyle(newVoiceId);
         closeAllDropdowns();
+        
+        // Instant voice change logic
+        if (player && (isGenerating || player.chunks.length > 0)) {
+            const resumeIndex = player.currentIndex;
+            const resumeOffset = player.offset;
+            
+            // Abort current generation and clear chunks so we don't play the old voice
+            await stopGenerationSafely();
+            player.pause();
+            player.chunks = [];
+            
+            const text = textInput.value.trim();
+            if (text) {
+                startGenerationAndPlayback(text, resumeIndex, resumeOffset);
+            }
+        }
     });
 });
 
@@ -861,7 +940,7 @@ async function stopGenerationSafely() {
     }
 }
 
-async function startGenerationAndPlayback(text, startChunkIndexOverride = null) {
+async function startGenerationAndPlayback(text, startChunkIndexOverride = null, startOffsetSeconds = 0) {
     await stopGenerationSafely();
     
     // Save text to DB before generating
@@ -927,7 +1006,6 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
 
     abortController = new AbortController();
     const signal = abortController.signal;
-    const voiceId = document.querySelector('.v-opt.active').getAttribute('data-val');
 
     // Helper to build chunk metadata
     const buildChunk = (wav, i) => ({
@@ -947,7 +1025,7 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
     if (startChunkIndex > 0 && currentDocId) {
         const cacheResults = await Promise.all(
             Array.from({ length: startChunkIndex }, (_, i) =>
-                getAudioChunk(currentDocId, i, voiceId)
+                getAudioChunk(currentDocId, i, currentVoiceId)
                     .then(wav => ({ i, wav }))
                     .catch(() => ({ i, wav: null }))
             )
@@ -967,7 +1045,7 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
 
     // Set playback to the resume point. player.chunks.length == startChunkIndex at this point.
     player.currentIndex = player.chunks.length;
-    player.offset = 0;
+    player.offset = startOffsetSeconds;
     player.isPlaying = true;
 
     // ── Phase 2: Generate chunks from resume point forward ──
@@ -980,7 +1058,7 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
                 
                 // Check cache first
                 if (currentDocId) {
-                    const cachedWav = await getAudioChunk(currentDocId, i, voiceId);
+                    const cachedWav = await getAudioChunk(currentDocId, i, currentVoiceId);
                     if (cachedWav) {
                         chunkData = buildChunk(cachedWav, i);
                     }
@@ -997,7 +1075,7 @@ async function startGenerationAndPlayback(text, startChunkIndexOverride = null) 
                     
                     // Save to cache
                     if (currentDocId) {
-                        await saveAudioChunk(currentDocId, i, voiceId, chunkData.wav);
+                        await saveAudioChunk(currentDocId, i, currentVoiceId, chunkData.wav);
                     }
                 }
                 

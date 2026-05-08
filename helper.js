@@ -2,7 +2,11 @@
 import { getModelFromCache, saveModelToCache } from './db.js';
 
 // Available languages for multilingual TTS
-export const AVAILABLE_LANGS = ['en', 'ko', 'es', 'pt', 'fr'];
+export const AVAILABLE_LANGS = [
+    'en', 'ko', 'ja', 'ar', 'bg', 'cs', 'da', 'de', 'el', 'es', 
+    'et', 'fi', 'fr', 'hi', 'hr', 'hu', 'id', 'it', 'lt', 'lv', 
+    'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'tr', 'uk', 'vi'
+];
 
 export function isValidLang(lang) {
     return AVAILABLE_LANGS.includes(lang);
